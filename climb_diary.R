@@ -1,19 +1,26 @@
 #Climbing diary application
 
 library(shiny)
-library(rhandsontable)
 library(dplyr)
 library(ggplot2)
 library(data.table)
 library(googlesheets)
 library(magrittr)
 library(zoo)
+library(plotly)
+library(lubridate)
 
+# libraries <- c('shiny', 'dplyr', 'ggplot2', 'data.table', 'googlesheets', 'magrittr', 'zoo', 'plotly')
+# lapply(libraries, require, character.only = TRUE)
+
+# connecting to the google spreadsheet - source table
 gs_auth(new_user = F)
 
 climb_diary <- gs_title('climb_diary')
 data <- gs_read(climb_diary, col_names = F)
-colnames(data) <- c('Date', 'Grade', 'Style')
+#data <- read.csv('climb_diary.csv')
+colnames(data) <- c('Date', 'Grade', 'Style', 'Type', 'Comment')
+data$Date %<>% as.numeric()
 data$Date %<>% zoo::as.Date(origin = "1970-01-01")
 #data$Grade %<>% as.numeric()
 data %<>% as.data.table()
@@ -44,37 +51,40 @@ ui <- fluidPage(
   sidebarLayout(
     sidebarPanel(
       
-      helpText("Insert new record and click 'Send'. Update the page to see new data"),
+      helpText("Insert new record and click 'Send'.
+               The main plot is scalable"),
       
       h3('New record'),
       dataTableOutput('new_record'),
       #textInput('name', 'Name'),
       dateInput('date', 'Date'),
-      sliderInput('grade', 'Grade', 4,8, 5, step= 0.25),
-      selectInput('style', 'Style', c('OS', 'TR', 'AF'), multiple = F),
-      actionButton("send", "Send"),
+      sliderInput('grade', 'Grade', 4,8, 5, step = 0.25),
+      selectInput('style', 'Style', c('OS', 'AF', 'RP', 'TR'), multiple = F),
+      radioButtons('type', 'Type', c('Indoor', 'Outdoor'), selected = 'Indoor'),
+      textInput('comment', 'Comment', value = "keywords"),
+      # add filtering by the keyword
+      actionButton("send", "Send")
       
-      br(),
-      br(),
-      
-      h3('Filter'),
-      dateRangeInput('date', 'Date', start = '2019-03-19', weekstart = 1, autoclose = T)
-    ),
+      # br(),
+      # 
+      # h3('Filter'),
+      # dateRangeInput('daterange', 'Date', start = '2019-03-19', weekstart = 1, autoclose = T)
+      ),
     
     mainPanel(
       tabsetPanel(
-        tabPanel("Plot", plotOutput("plot")), 
-        tabPanel("Frequency",  plotOutput('freq')), 
+        tabPanel("Plot", plotlyOutput("plot")), 
+        tabPanel("Frequency",  plotlyOutput('freq')), 
         tabPanel("Records", 
                  fluidPage(
                    fluidRow(
-                     column(6,
-                            h3("Top-10 routes"),
+                     column(4,
+                            h3("Top-10 routes (OS)"),
                             tableOutput('top')),
                      
-                     column(6,
+                     column(8,
                             h3("Last records"),
-                            tableOutput('table')))))
+                            DT::dataTableOutput('table')))))
         
       )
     )
@@ -89,45 +99,59 @@ ui <- fluidPage(
 
 server = function(input, output) {
   
+  # writing into the source table  
   observeEvent(input$send, {
     gs_add_row(climb_diary, input = c(as.numeric(input$date), 
-                                      as.double(input$grade), 
-                                      as.character(input$style)))
+                                      as.numeric(input$grade), 
+                                      as.character(input$style),
+                                      as.character(input$type),
+                                      as.character(input$comment)))
   })
   
+  #[Date %in% as.Date(input$daterange[1]):as.Date(input$daterange[2])]
   
+  # introduce last month or two to limit the graph
+  last_month <- ymd(Sys.Date()) - 60
   
-  output$plot = renderPlot(
-    ggplot(data[Date %in% as.Date(min(input$date)):as.Date(max(input$date))], aes(x = Date, y = Grade)) + 
-      geom_jitter(aes(col=as.factor(Style)), size = 6, width = 0.1, height=0.1, alpha=0.75) +
-      scale_y_continuous(breaks = seq(4, 8, 0.5), limits = c(4, 6)) +
-      geom_text(label=labels(data[Date %in% as.Date(min(input$date)):as.Date(max(input$date))]$Grade), 
-                nudge_x = -0.4, size=5, col='grey6') +
-      labs(color = 'Style') +
-      scale_color_manual(values=c("tomato", "steelblue3", "slategrey")) +
-      theme_minimal()
+  pal <- c("black", "steelblue3", "red3", "grey")
+  pal <- setNames(pal, c("AF", "OS", "RP", "TR"))
+  
+  # main graph with perfomance 
+  output$plot = renderPlotly(
+    plot_ly(data, x = ~Date, y = ~jitter(as.numeric(Grade)), 
+            type = 'scatter', symbol = ~factor(Type),
+            color = ~factor(Style),colors = pal,
+            text = ~paste("Grade: ", labels(data$Grade),
+                          '<br>Comment:', Comment)) %>%
+      layout(yaxis = list(title = 'Grade'))
   )
   
+  data[, ':=' (Date = as.character(Date),
+               Grade = as.character(labels(Grade)),
+               Comment = as.character(Comment),
+               Type = as.character(Type))] -> data_fine
+  
+  # Top-10 routes climbed OS
   output$top = renderTable(
-    head(data[,Route := as.character(labels(Grade))][order(-Grade)][,-2][, Date := as.character(data$Date)], 10)
+    head(data_fine[order(-Grade)][
+      Style == 'OS'][,c('Date', 'Type', 'Grade')], 10)
   )
   
-  #mb write here last 20 records? mb convert data into date format here
-  output$table = renderTable(
-    data.table('Date' = data$Date, #as.character(data$Date)
-               'Grade' = labels(data$Grade),
-               'Style' = as.character(data$Style))[
-                 Date %in% as.Date(min(input$date)):as.Date(max(input$date)),
-                 ][order(-Date)][,Date := as.character(Date)]
+  
+  output$table = DT::renderDataTable(
+    DT::datatable(data_fine[order(-Date)][,c('Date', 'Grade', 'Style', 'Type', 'Comment')], 
+                  options = list(pageLength = 10))  
   )
   
-  output$freq = renderPlot(
-    ggplot(data[Date %in% as.Date(min(input$date)):as.Date(max(input$date))], aes(Date)) +
-      geom_bar(fill = 'steelblue3', alpha=0.75, width = 0.7) +
-      labs(y = '# of routes') +
-      scale_y_continuous(breaks = seq(1, 10, 1)) +
-      #geom_text(aes(y=count(Date))) +
-      theme_minimal()
+  
+  output$freq = renderPlotly(
+    plot_ly(data[, .(val = sum(length(Grade))), by=list(Type, month(Date))], 
+            x = ~month, y = ~val, 
+            type='bar', color = ~factor(Type),
+            text = ~ifelse(month==month(Sys.Date()),
+                           paste(val, "routes in", month.name[month], ". Keep going!"),
+                           paste(val, "routes in", month.name[month])))  %>%
+      layout(yaxis = list(title = '# of Routes'), xaxis = list(range=range(1,12)), barmode = 'stack')
   )
   
 }
