@@ -4,29 +4,41 @@ library(shiny)
 library(dplyr)
 # library(ggplot2)
 library(data.table)
-library(googlesheets)
+library(DT)
+# library(googlesheets)
+library(googledrive)
+library(googlesheets4)
 library(magrittr)
 library(zoo)
 library(plotly)
 library(lubridate)
+library(readr)
+# source('gs_tidyverse_functions.R')
 # library(shinyWidgets)
 
-# libraries <- c('shiny', 'dplyr', 'ggplot2', 'data.table', 'googlesheets', 'magrittr', 'zoo', 'plotly')
-# lapply(libraries, require, character.only = TRUE)
+# carabiner image
+car <- 'https://png.pngtree.com/png-vector/20191028/ourlarge/pngtree-carabiner-icon-cartoon-style-png-image_1893658.jpg'
 
 # connecting to the google spreadsheet - source table
-gs_auth(new_user = F)
+drive_deauth()
+# drive_auth(email = 'e.a.zasukhina@gmail.com')
+# drive_user()
+gs_climb_diary <-
+  googledrive::drive_get(as_id("1AjnrXLs_JF02OpIwWbZc52mstBG7go50PkupYSHANdo"))
+drive_download(
+  gs_climb_diary,
+  path = "gs_climb_diary.csv",
+  overwrite = T
+)
 
-climb_diary <- gs_title('climb_diary')
-data <- gs_read(climb_diary, col_names = F)
-#data <- read.csv('climb_diary.csv')
-colnames(data) <- c('Date', 'Grade', 'Style', 'Type', 'Comment')
-data$Date %<>% as.numeric()
+data <- read_csv("gs_climb_diary.csv", 
+                 col_names = c('Date', 'Grade', 'Style', 'Type', 'Comment'),
+                 col_types = "nnccc")
+
+# sheets_auth(token = drive_token())
+
 data$Date %<>% zoo::as.Date(origin = "1970-01-01")
-data$Grade %<>% as.numeric()
 data %<>% as.data.table()
-
-#as.Date(DP$variable, origin = "1899-12-30")
 
 
 ### FUNCTIONS
@@ -73,13 +85,22 @@ functionForPlots <- function(TYPE) {
 
 ui <- fluidPage(
   
-  titlePanel("Liza's climbing diary"),
+  tags$head(
+    tags$style(HTML("
+      @import url('//fonts.googleapis.com/css?family=Lobster|Cabin:400,700');
+    "))
+  ),
+  
+  headerPanel(h1("Liza's climbing diary",
+        style = "font-family: 'Lobster', cursive;
+        font-weight: 500; line-height: 1.1; 
+        color: #ff4e08;")),
   
   sidebarLayout(
     sidebarPanel(
       
       helpText("Insert new record and click 'Send'.
-               The main plot is scalable"),
+               The main plot is scalable. WRITING IS NOT AVALIABLE ATM"),
       
       h3('New record'),
       dataTableOutput('new_record'),
@@ -90,15 +111,17 @@ ui <- fluidPage(
       radioButtons('type', 'Type', c('Indoor', 'Outdoor'), selected = 'Indoor'),
       textInput('comment', 'Comment', value = "keywords"),
       # add filtering by the keyword
-      actionButton("send", "Send")
+      # actionButton("send", "Send")
       
       # br(),
       # 
       # h3('Filter'),
       # dateRangeInput('daterange', 'Date', start = '2019-03-19', weekstart = 1, autoclose = T)
-      ),
+      ), 
     
     mainPanel(
+      # place icon
+      img(src=car, width = 50, align = "right"),
       tabsetPanel(
         tabPanel("Indoor", 
                  fluidPage(
@@ -129,15 +152,17 @@ ui <- fluidPage(
 #options(shiny.maxRequestSize = 9*1024^2)
 
 server = function(input, output) {
-  
-  # writing into the source table  
+
+  # writing into the source table - DOESNT WORK ATM
   observeEvent(input$send, {
-    gs_add_row(climb_diary, input = c(as.numeric(input$date), 
-                                      as.numeric(input$grade), 
-                                      as.character(input$style),
-                                      as.character(input$type),
-                                      as.character(input$comment)))
+    sheets_append(c(as.numeric(input$date),
+                  as.numeric(input$grade),
+                  as.character(input$style),
+                  as.character(input$type),
+                  as.character(input$comment)),
+                  ss = gs_climb_diary)
   })
+  
   
   # observeEvent(input$send, {
   #   sendSweetAlert(
